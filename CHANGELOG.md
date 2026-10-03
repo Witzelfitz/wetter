@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1 – 2026-10-03
+
 - Auf 132 Spalten begrenztes, zentriertes Layout mit kompakten Diagrammen und Tagesausblick.
 - Durchgehend dunkler Diagrammhintergrund und gemeinsame Stundenpositionen für Temperatur, Regenrisiko und Auswahl.
 - Detailansicht mit Luft, Wind, Sonne samt Tageslichtverlauf und weiteren aktuellen Werten; auf schmalen Fenstern scrollbar.
