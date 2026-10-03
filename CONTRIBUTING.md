@@ -22,6 +22,6 @@ python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
 Die Tests sollen ohne Wetter-API und ohne persönliche Zugangsdaten laufen. Für neue Datenfelder deren Einheit und Zeitbezug prüfen. Fehlende Werte dürfen nicht als Nullwerte erscheinen; bestehende Daten sollen bei einem Aktualisierungsfehler sichtbar bleiben.
 
-Bei UI-Änderungen mehrere Grössen prüfen: 120×36, 80×30 und 64×24. Mit `WETTER_RENDER_DIR=/tmp/wetter-render cargo test` lassen sich die Testansichten als Textdateien ausgeben.
+Bei UI-Änderungen mehrere Grössen prüfen: 220×60, 140×42, 120×36, 80×30 und 64×24. Mit `WETTER_RENDER_DIR=/tmp/wetter-render cargo test` lassen sich die Testansichten als Textdateien und JSON-Zellraster inklusive Farben ausgeben. Für farbige Vorschauen darf `NO_COLOR` nicht gesetzt sein.
 
 Pull Requests sollten Problem, Änderung und relevante Prüfung kurz beschreiben. Cargo.lock mit einchecken. IDE-Dateien, Zugangsdaten, `target/` und `dist/` bleiben lokal.
