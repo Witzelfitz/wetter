@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      RELEASE_TAG: ${{ github.ref_name }}
+      RUST_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Check tag and package version
+        run: python3 scripts/release.py check-version "$RELEASE_TAG"
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target "$RUST_TARGET"
+      - run: cargo fmt --all --check
+      - run: cargo test --locked --target "$RUST_TARGET"
+      - run: cargo clippy --locked --all-targets --target "$RUST_TARGET" -- -D warnings
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Build optimized binary
+        run: cargo build --locked --release --target "$RUST_TARGET"
+      - name: Package binary, documentation and licenses
+        run: python3 scripts/release.py package --binary "target/$RUST_TARGET/release/wetter" --target "$RUST_TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Generate formula and verify all archive checksums
+        run: python3 scripts/release.py formula --repository "$GH_REPO"
+      - run: ruby -c dist/wetter.rb
+      - name: Create or update the draft release
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "Refusing to replace an already published release. Use a new version." >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS dist/wetter.rb --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS dist/wetter.rb \
+              --draft --verify-tag --title "wetter $RELEASE_TAG" --generate-notes
+          fi

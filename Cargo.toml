@@ -1,0 +1,32 @@
+[package]
+name = "wetter"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Weather in your terminal: a compact CLI and interactive dashboard"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Witzelfitz/wetter"
+homepage = "https://github.com/Witzelfitz/wetter"
+keywords = ["weather", "cli", "tui", "open-meteo"]
+categories = ["command-line-utilities"]
+include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md"]
+
+[[bin]]
+name = "wetter"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = "0.29"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+tui-big-text = "0.8.10"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde_json = "1.0"
+unicode-width = "0.2"
+serde = { version = "1.0.229", features = ["derive"] }
+reqwest = { version = "0.13.5", features = ["blocking", "json", "query"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

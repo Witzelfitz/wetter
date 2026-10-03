@@ -1,0 +1,29 @@
+name: Fehler melden
+description: Ein Problem mit wetter beschreiben
+title: '[Bug] '
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Ausgabe von wetter --version
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Betriebssystem und Terminal
+      placeholder: macOS 14, Apple Silicon, Terminal.app
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte und erwartetes Ergebnis
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Tatsächliches Ergebnis
+      description: Fehlermeldung oder Screenshot; persönliche Ortsangaben bei Bedarf entfernen.
+    validations:
+      required: true
