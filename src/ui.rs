@@ -12,7 +12,10 @@ use unicode_width::UnicodeWidthStr;
 pub fn zeichnen(f: &mut Frame, app: &App) {
     let t = Theme::neu();
     f.render_widget(Block::default().style(t.basis()), f.area());
-    let area = f.area().inner(Margin::new(2, 1));
+    let mut area = f.area().inner(Margin::new(2, 1));
+    let breite = area.width.min(132);
+    area.x += (area.width - breite) / 2;
+    area.width = breite;
     if area.width < 28 || area.height < 10 {
         f.render_widget(
             Paragraph::new("Fenster vergrössern\n(mind. 32 × 12)\nq: Beenden").style(t.basis()),
@@ -107,6 +110,11 @@ pub fn zeichnen(f: &mut Frame, app: &App) {
 }
 
 fn uebersicht(f: &mut Frame, area: Rect, b: &Bericht, t: Theme) {
+    // Zusätzlicher Platz bleibt ausserhalb der Informationsgruppen.
+    let area = Rect {
+        height: area.height.min(30),
+        ..area
+    };
     if area.height < 24 {
         let mit_kurve = area.height >= 20 && area.width >= 54;
         let mit_ausblick = area.height >= 14;
@@ -182,9 +190,10 @@ fn uebersicht(f: &mut Frame, area: Rect, b: &Bericht, t: Theme) {
     }
     if area.width >= 106 && area.height >= 23 {
         let rows = Layout::vertical([
-            Constraint::Min(12),
+            Constraint::Length(14.min(area.height.saturating_sub(11))),
             Constraint::Length(5),
             Constraint::Length(6),
+            Constraint::Min(0),
         ])
         .split(area);
         let cols = Layout::horizontal([Constraint::Length(44), Constraint::Min(50)])
@@ -198,9 +207,14 @@ fn uebersicht(f: &mut Frame, area: Rect, b: &Bericht, t: Theme) {
         let gross = area.width >= 76 && area.height >= 26;
         let rows = Layout::vertical([
             Constraint::Length(if gross { 7 } else { 4 }),
-            Constraint::Min(5),
+            Constraint::Length(
+                area.height
+                    .saturating_sub(if gross { 17 } else { 14 })
+                    .min(12),
+            ),
             Constraint::Length(if area.width < 54 { 7 } else { 4 }),
             Constraint::Length(6),
+            Constraint::Min(0),
         ])
         .split(area);
         hero(f, rows[0], b, t);
@@ -427,6 +441,10 @@ fn kennzahlen(f: &mut Frame, area: Rect, b: &Bericht, t: Theme) {
 }
 
 fn ausblick(f: &mut Frame, area: Rect, b: &Bericht, t: Theme) {
+    let area = Rect {
+        width: area.width.min(78),
+        ..area
+    };
     let w = &b.wetter;
     let rows = w.daily.time.iter().enumerate().take(3).map(|(i, date)| {
         let name = if Some(i) == w.heute() {
@@ -455,10 +473,10 @@ fn ausblick(f: &mut Frame, area: Rect, b: &Bericht, t: Theme) {
         rows,
         [
             Constraint::Length(8),
-            Constraint::Min(8),
+            Constraint::Length(area.width.saturating_sub(8 + 7 + 7 + 11 + 4).min(26)),
             Constraint::Length(7),
             Constraint::Length(7),
-            Constraint::Length(if area.width < 65 { 7 } else { 16 }),
+            Constraint::Length(if area.width < 65 { 7 } else { 11 }),
         ],
     )
     .header(
@@ -511,31 +529,61 @@ pub fn temperatursegmente(w: &Wetter, indices: &[usize]) -> Vec<Vec<(f64, f64)>>
     result
 }
 
+// Gleiche Braille-Rasterprojektion wie Ratatui: zwei horizontale Punkte pro Zelle.
+fn stunden_spalte(stunde: usize, horizont: usize, breite: u16) -> u16 {
+    (((stunde as f64 / horizont.max(1) as f64) * (f64::from(breite) * 2.0 - 1.0).max(0.0)).round()
+        as u16
+        / 2)
+    .min(breite.saturating_sub(1))
+}
+
 fn kurve(f: &mut Frame, area: Rect, w: &Wetter, horizont: usize, auswahl: Option<usize>, t: Theme) {
-    if area.height < 5 {
+    if area.height < 7 || area.width < 18 {
         return;
     }
+    f.render_widget(Block::default().style(t.basis()), area);
     let indices: Vec<_> = w.stunden_indices().into_iter().take(horizont + 1).collect();
     let segments = temperatursegmente(w, &indices);
     let bounds: Vec<f64> = segments.iter().flatten().map(|(_, y)| *y).collect();
-    if bounds.is_empty() {
-        f.render_widget(
-            Paragraph::new("STUNDENVERLAUF\nKeine Temperaturdaten verfügbar.")
-                .style(Style::default().fg(t.muted)),
-            area,
-        );
-        return;
-    }
-    let low = bounds.iter().copied().fold(f64::INFINITY, f64::min).floor() - 1.0;
-    let high = bounds
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max)
-        .ceil()
-        + 1.0;
-    let index = auswahl.unwrap_or(0).min(indices.len().saturating_sub(1));
-    let markierung = vec![(index as f64, low), (index as f64, high)];
-    let mut sets: Vec<_> = segments
+    let (low, high) = if bounds.is_empty() {
+        (0.0, 1.0)
+    } else {
+        (
+            bounds.iter().copied().fold(f64::INFINITY, f64::min).floor() - 1.0,
+            bounds
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max)
+                .ceil()
+                + 1.0,
+        )
+    };
+    let labels = [
+        format!("{high:.0}°"),
+        format!("{:.0}°", (low + high) / 2.0),
+        format!("{low:.0}°"),
+    ];
+    let rand = if bounds.is_empty() {
+        5
+    } else {
+        labels.iter().map(|s| s.width() as u16).max().unwrap_or(3) + 2
+    };
+    let plot = Rect::new(
+        area.x + rand,
+        area.y + 1,
+        area.width.saturating_sub(rand),
+        area.height - 5,
+    );
+    let start = indices
+        .first()
+        .and_then(|&i| w.hourly.time.get(i))
+        .map_or("–", |s| uhrzeit(Some(s)));
+    f.render_widget(
+        Paragraph::new(format!("TEMPERATUR · {horizont} H AB {start}"))
+            .style(t.basis().fg(t.muted)),
+        Rect { height: 1, ..area },
+    );
+    let sets = segments
         .iter()
         .map(|s| {
             Dataset::default()
@@ -548,94 +596,135 @@ fn kurve(f: &mut Frame, area: Rect, w: &Wetter, horizont: usize, auswahl: Option
                 .style(Style::default().fg(t.sun))
                 .data(s)
         })
-        .collect();
-    if auswahl.is_some() {
-        sets.push(
-            Dataset::default()
-                .marker(symbols::Marker::Braille)
-                .graph_type(GraphType::Line)
-                .style(Style::default().fg(t.active))
-                .data(&markierung),
+        .collect::<Vec<_>>();
+    // Achsenbeschriftung ausserhalb des Charts: Temperatur und Regen nutzen exakt
+    // dieselbe Plot-Breite, auch bei negativen Temperaturen und beim Resize.
+    f.render_widget(
+        Chart::new(sets)
+            .style(t.basis())
+            .block(Block::default().style(t.basis()))
+            .x_axis(Axis::default().bounds([0.0, horizont as f64]))
+            .y_axis(Axis::default().bounds([low, high])),
+        plot,
+    );
+    if bounds.is_empty() {
+        f.render_widget(
+            Paragraph::new("Keine Temperaturdaten verfügbar.")
+                .style(t.basis().fg(t.muted))
+                .wrap(Wrap { trim: true }),
+            plot,
         );
+    } else {
+        for (n, label) in labels.into_iter().enumerate() {
+            let y = plot.y + n as u16 * (plot.height - 1) / 2;
+            f.render_widget(
+                Paragraph::new(label)
+                    .alignment(Alignment::Right)
+                    .style(t.basis().fg(t.muted)),
+                Rect::new(area.x, y, rand - 2, 1),
+            );
+        }
     }
-    let start = indices
-        .first()
-        .and_then(|&i| w.hourly.time.get(i))
-        .map_or("–", |s| uhrzeit(Some(s)));
-    let chart_area = Rect {
-        height: area.height.saturating_sub(2),
-        ..area
+    let zeit_y = plot.bottom();
+    let regen_y = zeit_y + 2;
+    let schritt = if plot.width >= 60 {
+        horizont / 4
+    } else {
+        horizont / 2
     };
-    let chart = Chart::new(sets)
-        .block(
-            Block::default()
-                .title(format!("TEMPERATUR · {horizont} H AB {start} (ORTSZEIT)"))
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(t.border))
-                .title_style(Style::default().fg(t.muted)),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, horizont as f64])
-                .labels([
-                    start.to_owned(),
-                    format!("+{} h", horizont / 2),
-                    format!("+{horizont} h"),
-                ])
-                .style(Style::default().fg(t.muted)),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([low, high])
-                .labels([
-                    format!("{low:.0}°"),
-                    format!("{:.0}°", (low + high) / 2.0),
-                    format!("{high:.0}°"),
-                ])
-                .style(Style::default().fg(t.muted)),
+    for n in (0..=horizont).step_by(schritt.max(1)) {
+        let label = indices
+            .get(n)
+            .and_then(|&i| w.hourly.time.get(i))
+            .map_or_else(|| format!("+{n} h"), |s| uhrzeit(Some(s)).to_owned());
+        let x = (plot.x + stunden_spalte(n, horizont, plot.width))
+            .saturating_sub((label.width() / 2) as u16)
+            .clamp(plot.x, plot.right().saturating_sub(label.width() as u16));
+        f.render_widget(
+            Paragraph::new(label).style(t.basis().fg(t.muted)),
+            Rect::new(x, zeit_y, 5.min(plot.right() - x), 1),
         );
-    f.render_widget(chart, chart_area);
-    // Separate Leiste: Wahrscheinlichkeiten, keine erfundenen Regenmengen.
-    let compact = area.width < 66;
-    let mut spans = vec![Span::styled(
-        if compact { "Nied. % " } else { "Niederschlag " },
-        Style::default().fg(t.muted),
-    )];
-    for (n, &i) in indices.iter().enumerate() {
-        let chance = w.hourly.precipitation_probability.get(i).copied().flatten();
-        let symbol = match chance {
-            Some(v) if v.is_finite() => ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-                [((v.clamp(0.0, 100.0) / 100.0) * 7.0).round() as usize],
-            _ => "·",
-        };
-        spans.push(Span::styled(
-            if compact {
-                symbol.to_owned()
-            } else {
-                format!("{symbol} ")
-            },
-            Style::default().fg(if auswahl == Some(n) { t.active } else { t.rain }),
-        ));
     }
     f.render_widget(
-        Paragraph::new(vec![
-            Line::from(spans),
-            Line::from(Span::styled(
-                "Risiko 0–100 % · fehlende Werte: ·",
-                Style::default().fg(t.muted),
-            )),
-        ]),
-        Rect {
-            x: area.x,
-            y: area.bottom() - 2,
-            width: area.width,
-            height: 2,
-        },
+        Paragraph::new("Regenrisiko · %").style(t.basis().fg(t.muted)),
+        Rect::new(area.x, zeit_y + 1, area.width, 1),
+    );
+    // Ein Zeichen je echter Stunde, auf derselben Zeitachse wie die Temperatur.
+    // Fehlende Stunden bleiben erkennbar; es werden keine Werte interpoliert.
+    for n in 0..=horizont {
+        let chance = indices
+            .get(n)
+            .and_then(|&i| w.hourly.precipitation_probability.get(i))
+            .copied()
+            .flatten()
+            .filter(|v| v.is_finite());
+        let (symbol, color) = match chance {
+            Some(0.0) => ("─", t.border),
+            Some(v) => (
+                ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+                    [((v.clamp(0.0, 100.0) / 100.0) * 7.0).round() as usize],
+                t.rain,
+            ),
+            None => ("·", t.muted),
+        };
+        f.buffer_mut()[(plot.x + stunden_spalte(n, horizont, plot.width), regen_y)]
+            .set_symbol(symbol)
+            .set_style(t.basis().fg(color));
+    }
+    if let Some(index) = auswahl.filter(|&i| i < indices.len()) {
+        let x = plot.x + stunden_spalte(index, horizont, plot.width);
+        for y in plot.y..=regen_y {
+            let cell = &mut f.buffer_mut()[(x, y)];
+            if cell.symbol() == " " {
+                cell.set_symbol("┆");
+            }
+            cell.set_fg(t.active);
+        }
+    }
+    let komplett = indices.len() == horizont + 1;
+    let regen_vollstaendig = komplett
+        && indices.iter().all(|&i| {
+            w.hourly
+                .precipitation_probability
+                .get(i)
+                .copied()
+                .flatten()
+                .is_some_and(f64::is_finite)
+        });
+    let trocken = regen_vollstaendig
+        && indices.iter().all(|&i| {
+            w.hourly.precipitation_probability.get(i) == Some(&Some(0.0))
+                && w.hourly.precipitation.get(i) == Some(&Some(0.0))
+        });
+    let hinweis = if trocken {
+        if area.width >= 58 {
+            "Für diesen Zeitraum kein Niederschlag prognostiziert."
+        } else {
+            "Kein Niederschlag prognostiziert."
+        }
+    } else if !regen_vollstaendig || bounds.len() != horizont + 1 {
+        "Lücken / · = fehlende Stundendaten"
+    } else {
+        ""
+    };
+    f.render_widget(
+        Paragraph::new(hinweis).style(t.basis().fg(t.muted)),
+        Rect::new(area.x, regen_y + 1, area.width, 1),
     );
 }
 
 fn stunden(f: &mut Frame, area: Rect, b: &Bericht, app: &App, t: Theme) {
-    let parts = Layout::vertical([Constraint::Min(6), Constraint::Length(5)]).split(area);
+    let hoehe = if area.height >= 13 {
+        area.height.saturating_sub(6).min(16)
+    } else {
+        0
+    };
+    let parts = Layout::vertical([
+        Constraint::Length(hoehe),
+        Constraint::Length(6),
+        Constraint::Min(0),
+    ])
+    .split(area);
     kurve(f, parts[0], &b.wetter, 24, Some(app.stunde), t);
     let w = &b.wetter;
     if let Some(&i) = w.stunden_indices().get(app.stunde) {
@@ -645,54 +734,218 @@ fn stunden(f: &mut Frame, area: Rect, b: &Bericht, app: &App, t: Theme) {
             .get(i)
             .map_or("–", String::as_str)
             .replace('T', " ");
-        let text = format!(
-            "{} · {}\nTemperatur {}   Wind {}\nNiederschlag: {} Risiko · {} in der vorangehenden Stunde\n← → Stunde wählen · Tab Ansicht wechseln",
-            zeit,
-            wettertext(w.hourly.weather_code.get(i).copied().flatten()),
-            wert(w.hourly.temperature_2m.get(i).copied().flatten(), " °C"),
-            wert(w.hourly.wind_speed_10m.get(i).copied().flatten(), " km/h"),
-            ganz(
-                w.hourly.precipitation_probability.get(i).copied().flatten(),
-                " %"
-            ),
-            wert(w.hourly.precipitation.get(i).copied().flatten(), " mm")
-        );
+        let text = vec![
+            Line::from(Span::styled(
+                format!(
+                    "{zeit} · {}",
+                    wettertext(w.hourly.weather_code.get(i).copied().flatten())
+                ),
+                Style::default().fg(t.active),
+            )),
+            Line::from(vec![
+                Span::styled(
+                    wert(w.hourly.temperature_2m.get(i).copied().flatten(), " °C"),
+                    Style::default().bold(),
+                ),
+                Span::raw(format!(
+                    "    Wind {}",
+                    wert(w.hourly.wind_speed_10m.get(i).copied().flatten(), " km/h")
+                )),
+            ]),
+            Line::from(format!(
+                "Regenrisiko {} · Niederschlag {}",
+                ganz(
+                    w.hourly.precipitation_probability.get(i).copied().flatten(),
+                    " %"
+                ),
+                wert(w.hourly.precipitation.get(i).copied().flatten(), " mm")
+            )),
+            Line::from(Span::styled(
+                "Regenmenge: vorangehende Stunde · Ortszeit",
+                Style::default().fg(t.muted),
+            )),
+        ];
         f.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: true })
-                .style(Style::default().fg(t.active)),
+                .style(t.basis()),
             parts[1],
         );
     }
 }
 
+fn detail_gruppe(
+    buf: &mut Buffer,
+    area: Rect,
+    titel: &str,
+    wert: String,
+    label: &str,
+    zeilen: Vec<Line<'static>>,
+    t: Theme,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(titel.to_owned(), Style::default().fg(t.muted))),
+        Line::default(),
+        Line::from(Span::styled(wert, Style::default().fg(t.text).bold())),
+        Line::from(Span::styled(label.to_owned(), Style::default().fg(t.muted))),
+        Line::default(),
+    ];
+    lines.extend(zeilen);
+    Paragraph::new(lines).style(t.basis()).render(area, buf);
+}
+
+fn tageslicht(w: &Wetter, breite: u16, t: Theme) -> Line<'static> {
+    let parse = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok();
+    let zeiten = w
+        .tageszeit(&w.daily.sunrise)
+        .and_then(parse)
+        .zip(w.tageszeit(&w.daily.sunset).and_then(parse))
+        .zip(parse(&w.current.time));
+    let Some(((auf, unter), jetzt)) = zeiten.filter(|((auf, unter), jetzt)| {
+        auf < unter && auf.date() == jetzt.date() && unter.date() == jetzt.date()
+    }) else {
+        return Line::from(Span::styled(
+            "— Tageslichtverlauf nicht verfügbar",
+            Style::default().fg(t.muted),
+        ));
+    };
+    let null = jetzt.date().and_hms_opt(0, 0, 0).unwrap();
+    let position = |zeit: NaiveDateTime| {
+        (((zeit - null).num_minutes() as f64 / 1440.0) * f64::from(breite.saturating_sub(1)))
+            .round() as u16
+    };
+    Line::from(
+        (0..breite)
+            .map(|x| {
+                let (symbol, farbe) = if x == position(jetzt) {
+                    ("│", t.active)
+                } else if (position(auf)..=position(unter)).contains(&x) {
+                    ("━", t.sun)
+                } else {
+                    ("─", t.border)
+                };
+                Span::styled(symbol, Style::default().fg(farbe))
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn details(f: &mut Frame, area: Rect, b: &Bericht, offset: u16, t: Theme) {
+    if area.is_empty() {
+        return;
+    }
     let w = &b.wetter;
     let a = &w.current;
-    let text = format!(
-        "JETZT · {}\n\nLuftfeuchte        {}\nTaupunkt           {}\nLuftdruck          {} (Meereshöhe)\nSichtweite         {}\nBewölkung          {}\nWindböen           {}\n\nHEUTE · TAGESPROGNOSE\n\nSonnenaufgang      {}\nSonnenuntergang    {}\nTageslicht         {}\nSonnenschein       {}\nUV-Maximum         {}\nNiederschlag       {}\n\nAlle Zeiten: {}\n— = keine Daten · ↑ ↓ zum Scrollen",
-        a.time.replace('T', " "),
+    let zwei = area.width >= 76;
+    let breite = if zwei {
+        (area.width - 4) / 2
+    } else {
+        area.width
+    };
+    let hoehe = if zwei { 26 } else { 44 };
+    let virtuell = Rect::new(0, 0, area.width, hoehe);
+    let mut buf = Buffer::empty(virtuell);
+    buf.set_style(virtuell, t.basis());
+    let luft = Rect::new(0, 0, breite, 9);
+    let wind = Rect::new(
+        if zwei { breite + 4 } else { 0 },
+        if zwei { 0 } else { 9 },
+        breite,
+        9,
+    );
+    let sonne = Rect::new(0, if zwei { 10 } else { 18 }, breite, 14);
+    let weitere = Rect::new(
+        if zwei { breite + 4 } else { 0 },
+        if zwei { 10 } else { 33 },
+        breite,
+        9,
+    );
+    detail_gruppe(
+        &mut buf,
+        luft,
+        "LUFT · JETZT",
         ganz(a.relative_humidity_2m, " %"),
-        wert(a.dew_point_2m, " °C"),
-        ganz(a.pressure_msl, " hPa"),
-        wert(a.visibility.map(|m| m / 1000.0), " km"),
-        ganz(a.cloud_cover, " %"),
-        wert(a.wind_gusts_10m, " km/h"),
-        uhrzeit(w.tageszeit(&w.daily.sunrise)),
-        uhrzeit(w.tageszeit(&w.daily.sunset)),
+        "Luftfeuchte",
+        vec![
+            Line::from(format!("Taupunkt     {}", wert(a.dew_point_2m, " °C"))),
+            Line::from(format!("Bewölkung    {}", ganz(a.cloud_cover, " %"))),
+        ],
+        t,
+    );
+    detail_gruppe(
+        &mut buf,
+        wind,
+        "WIND · JETZT",
+        wert(a.wind_speed_10m, " km/h"),
+        "Windgeschwindigkeit",
+        vec![
+            Line::from(format!(
+                "Richtung     aus {}",
+                windrichtung(a.wind_direction_10m)
+            )),
+            Line::from(format!("Böen         {}", wert(a.wind_gusts_10m, " km/h"))),
+        ],
+        t,
+    );
+    let skala = format!(
+        "00{: ^width$}24",
+        "12",
+        width = breite.saturating_sub(4) as usize
+    );
+    detail_gruppe(
+        &mut buf,
+        sonne,
+        "SONNE · HEUTE / PROGNOSE",
         dauer(w.tageswert(&w.daily.daylight_duration)),
-        dauer(w.tageswert(&w.daily.sunshine_duration)),
-        wert(w.tageswert(&w.daily.uv_index_max), ""),
-        wert(w.tageswert(&w.daily.precipitation_sum), " mm"),
-        w.timezone
+        "Tageslicht",
+        vec![
+            Line::from(format!(
+                "Auf {} · Unter {}",
+                uhrzeit(w.tageszeit(&w.daily.sunrise)),
+                uhrzeit(w.tageszeit(&w.daily.sunset))
+            )),
+            tageslicht(w, breite, t),
+            Line::from(Span::styled(skala, Style::default().fg(t.muted))),
+            Line::default(),
+            Line::from(format!(
+                "Sonnenschein  {}",
+                dauer(w.tageswert(&w.daily.sunshine_duration))
+            )),
+            Line::from(format!(
+                "UV-Maximum    {}",
+                wert(w.tageswert(&w.daily.uv_index_max), "")
+            )),
+            Line::from(format!(
+                "Regen heute   {}",
+                wert(w.tageswert(&w.daily.precipitation_sum), " mm")
+            )),
+        ],
+        t,
     );
-    let max_scroll = (text.lines().count() as u16).saturating_sub(area.height);
-    f.render_widget(
-        Paragraph::new(text)
-            .scroll((offset.min(max_scroll), 0))
-            .style(t.basis()),
-        area,
+    detail_gruppe(
+        &mut buf,
+        weitere,
+        "WEITERE WERTE · JETZT",
+        wert(a.visibility.map(|m| m / 1000.0), " km"),
+        "Sichtweite",
+        vec![
+            Line::from(format!("Luftdruck    {}", ganz(a.pressure_msl, " hPa"))),
+            Line::from(Span::styled(
+                "bezogen auf Meereshöhe",
+                Style::default().fg(t.muted),
+            )),
+        ],
+        t,
     );
+    Paragraph::new(format!("Ortszeit · {} · ↑ ↓ Scrollen", w.timezone))
+        .style(t.basis().fg(t.muted))
+        .render(Rect::new(0, hoehe - 1, area.width, 1), &mut buf);
+    let scroll = offset.min(hoehe.saturating_sub(area.height));
+    for y in 0..area.height.min(hoehe - scroll) {
+        for x in 0..area.width {
+            f.buffer_mut()[(area.x + x, area.y + y)] = buf[(x, y + scroll)].clone();
+        }
+    }
 }
 
 fn overlay(f: &mut Frame, area: Rect, dialog: &Dialog, t: Theme) {
@@ -738,7 +991,7 @@ fn overlay(f: &mut Frame, area: Rect, dialog: &Dialog, t: Theme) {
             let mut state=ListState::default().with_selected(Some(*index));
             f.render_stateful_widget(List::new(items).highlight_symbol("› ").highlight_style(Style::default().fg(t.active).bold()).block(Block::new().title_bottom("↑ ↓ wählen · Enter öffnen · Esc zurück")),inner,&mut state);
         }
-        Dialog::Hilfe=>f.render_widget(Paragraph::new("Tab / 1 2 3   Übersicht, Stunden, Details\n← →           Ansicht; in Stunden: Stunde wählen\n↑ ↓           Details scrollen / Ort wählen\n/             Neuen Ort suchen\nr             Wetter aktualisieren\nq / Esc       Beenden (im Dialog: zurück)\nCtrl+C        Sofort beenden\n\nGelb: Temperatur · Blau: Niederschlagsrisiko\nTürkis: aktive Auswahl · —: fehlende Daten\nZeiten am gewählten Ort, Stand laut Wettermodell.\n\nBeliebige Taste: zurück").style(t.basis().bg(t.surface)).wrap(Wrap{trim:true}),inner),
+        Dialog::Hilfe=>f.render_widget(Paragraph::new("Tab / 1 2 3   Übersicht, Stunden, Details\n← →           Ansicht; in Stunden: Stunde wählen\n↑ ↓           Details scrollen / Ort wählen\n/             Neuen Ort suchen\nr             Wetter aktualisieren\nq / Esc       Beenden (im Dialog: zurück)\nCtrl+C        Sofort beenden\n\nGelb: Temperatur · Blau: Niederschlagsrisiko\nTürkis: Auswahl / Modellzeit · — / ·: fehlende Daten\nZeiten am gewählten Ort, Stand laut Wettermodell.\n\nBeliebige Taste: zurück").style(t.basis().bg(t.surface)).wrap(Wrap{trim:true}),inner),
     }
 }
 
@@ -746,6 +999,139 @@ fn overlay(f: &mut Frame, area: Rect, dialog: &Dialog, t: Theme) {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    fn text(buf: &Buffer) -> String {
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn temperatur_regen_und_auswahl_teilen_dieselbe_stundenspalte() {
+        let t = Theme {
+            bg: Color::Rgb(16, 21, 29),
+            sun: Color::Yellow,
+            rain: Color::Blue,
+            active: Color::Cyan,
+            ..Theme::neu()
+        };
+        for width in [33, 65, 110, 132] {
+            for stunde in [0, 5, 12, 24] {
+                let mut b = crate::test_support::beispiel();
+                b.wetter.hourly.temperature_2m = vec![None; 25];
+                b.wetter.hourly.temperature_2m[stunde] = Some(-12.0);
+                b.wetter.hourly.precipitation_probability = vec![None; 25];
+                b.wetter.hourly.precipitation_probability[stunde] = Some(80.0);
+                let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+                terminal
+                    .draw(|f| kurve(f, f.area(), &b.wetter, 24, None, t))
+                    .unwrap();
+                let buf = terminal.backend().buffer();
+                let punkt = (1..12)
+                    .find_map(|y| (0..width).find(|&x| buf[(x, y)].fg == t.sun))
+                    .unwrap();
+                let regen = (0..width).find(|&x| buf[(x, 14)].fg == t.rain).unwrap();
+                assert_eq!(punkt, regen, "Stunde {stunde}, Breite {width}");
+                for cell in &buf.content {
+                    assert_eq!(cell.bg, t.bg);
+                }
+                terminal
+                    .draw(|f| kurve(f, f.area(), &b.wetter, 24, Some(stunde), t))
+                    .unwrap();
+                let buf = terminal.backend().buffer();
+                for y in 1..=14 {
+                    assert_eq!(buf[(punkt, y)].fg, t.active);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn trockenhinweis_braucht_vollstaendige_nullwerte() {
+        let mut b = crate::test_support::beispiel();
+        b.wetter.hourly.precipitation_probability = vec![Some(0.0); 25];
+        b.wetter.hourly.precipitation = vec![Some(0.0); 25];
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        terminal
+            .draw(|f| kurve(f, f.area(), &b.wetter, 24, None, Theme::neu()))
+            .unwrap();
+        assert!(text(terminal.backend().buffer()).contains("kein Niederschlag prognostiziert"));
+        b.wetter.hourly.precipitation_probability[4] = None;
+        terminal
+            .draw(|f| kurve(f, f.area(), &b.wetter, 24, None, Theme::neu()))
+            .unwrap();
+        let bild = text(terminal.backend().buffer());
+        assert!(!bild.contains("kein Niederschlag"));
+        assert!(bild.contains("fehlende Stundendaten"));
+        b.wetter.hourly = Stunden::default();
+        terminal
+            .draw(|f| kurve(f, f.area(), &b.wetter, 24, None, Theme::neu()))
+            .unwrap();
+        assert!(text(terminal.backend().buffer()).contains("Keine Temperaturdaten"));
+    }
+
+    #[test]
+    fn grosse_fenster_lassen_aussenraum_und_footer_unten() {
+        for ansicht in 0..3 {
+            let mut app = App::neu(Some(crate::test_support::beispiel()), true);
+            app.ansicht = ansicht;
+            let mut terminal = Terminal::new(TestBackend::new(220, 60)).unwrap();
+            terminal.draw(|f| zeichnen(f, &app)).unwrap();
+            let buf = terminal.backend().buffer();
+            for y in 0..60 {
+                for x in (0..44).chain(176..220) {
+                    assert_eq!(buf[(x, y)].symbol(), " ");
+                }
+            }
+            for y in 36..56 {
+                for x in 0..220 {
+                    assert_eq!(buf[(x, y)].symbol(), " ");
+                }
+            }
+            assert!(text(buf).lines().nth(57).unwrap().contains("[q]"));
+        }
+    }
+
+    #[test]
+    fn details_bleiben_beim_scrollen_vollstaendig_und_sonne_braucht_daten() {
+        let b = crate::test_support::beispiel();
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+        let mut alle = String::new();
+        for offset in [0, 8, 16, 24, 40] {
+            terminal
+                .draw(|f| details(f, f.area(), &b, offset, Theme::neu()))
+                .unwrap();
+            alle.push_str(&text(terminal.backend().buffer()));
+        }
+        for label in [
+            "LUFT",
+            "WIND",
+            "SONNE",
+            "WEITERE WERTE",
+            "Taupunkt",
+            "Bewölkung",
+            "Böen",
+            "Sonnenschein",
+            "UV-Maximum",
+            "Regen heute",
+            "Luftdruck",
+            "Sichtweite",
+        ] {
+            assert!(alle.contains(label), "Nicht erreichbar: {label}");
+        }
+        let mut w = b.wetter;
+        w.daily.sunrise.clear();
+        assert!(
+            tageslicht(&w, 40, Theme::neu())
+                .to_string()
+                .contains("nicht verfügbar")
+        );
+    }
 
     #[test]
     fn kurve_laesst_luecken_und_verwendet_keine_tagesextreme() {
@@ -770,7 +1156,16 @@ mod tests {
     }
     #[test]
     fn ansichten_bleiben_bei_groessenwechseln_und_fehlenden_daten_stabil() {
-        for (width, height) in [(120, 36), (96, 38), (80, 30), (64, 24), (40, 18), (20, 8)] {
+        for (width, height) in [
+            (220, 60),
+            (140, 42),
+            (120, 36),
+            (96, 38),
+            (80, 30),
+            (64, 24),
+            (40, 18),
+            (20, 8),
+        ] {
             for view in 0..3 {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let mut app = App::neu(Some(crate::test_support::beispiel()), true);
@@ -796,6 +1191,23 @@ mod tests {
                 if let Ok(dir) = std::env::var("WETTER_RENDER_DIR") {
                     std::fs::create_dir_all(&dir).unwrap();
                     std::fs::write(format!("{dir}/{width}x{height}-{view}.txt"), &text).unwrap();
+                    let rgb = |c: Color| match c {
+                        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                        _ => "".to_owned(),
+                    };
+                    let cells = buffer
+                        .content
+                        .iter()
+                        .map(|c| serde_json::json!([c.symbol(), rgb(c.fg), rgb(c.bg)]))
+                        .collect::<Vec<_>>();
+                    std::fs::write(
+                        format!("{dir}/{width}x{height}-{view}.json"),
+                        serde_json::to_vec(
+                            &serde_json::json!({"width":width,"height":height,"cells":cells}),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
                 }
                 let b = app.bericht.as_mut().unwrap();
                 b.wetter.current = Aktuell::default();

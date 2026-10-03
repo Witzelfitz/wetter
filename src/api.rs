@@ -14,10 +14,11 @@ pub fn suchen(client: &Client, name: &str) -> Result<Vec<Ort>, String> {
     if name.trim().chars().count() < 2 {
         return Err("Bitte mindestens zwei Zeichen eingeben.".into());
     }
+    let name = suchname(name);
     let mut suche: OrtSuche = abrufen(
         client,
         "https://geocoding-api.open-meteo.com/v1/search",
-        &[("name", name), ("count", "20"), ("language", "de")],
+        &[("name", name.as_str()), ("count", "20"), ("language", "de")],
     )?;
     suche
         .results
@@ -26,6 +27,19 @@ pub fn suchen(client: &Client, name: &str) -> Result<Vec<Ort>, String> {
         return Err("Keinen Ort gefunden. Bitte Schreibweise prüfen.".into());
     }
     Ok(suche.results)
+}
+
+// GeoNames erwartet bei Abkürzungen wie St.Gallen ein Leerzeichen nach dem Punkt.
+fn suchname(name: &str) -> String {
+    let mut result = String::new();
+    let mut chars = name.trim().chars().peekable();
+    while let Some(c) = chars.next() {
+        result.push(c);
+        if c == '.' && chars.peek().is_some_and(|c| c.is_alphabetic()) {
+            result.push(' ');
+        }
+    }
+    result
 }
 
 pub fn wetter(client: &Client, ort: &Ort) -> Result<Wetter, String> {
@@ -71,4 +85,18 @@ fn abrufen<T: DeserializeOwned>(
     antwort
         .json()
         .map_err(|e| format!("Die Wetterdaten konnten nicht gelesen werden: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ortsabkuerzungen_werden_ohne_verlust_normalisiert() {
+        assert_eq!(suchname(" St.Gallen "), "St. Gallen");
+        assert_eq!(suchname("St. Gallen"), "St. Gallen");
+        assert_eq!(suchname("St.Moritz"), "St. Moritz");
+        assert_eq!(suchname("Zürich"), "Zürich");
+        assert_eq!(suchname("9000"), "9000");
+    }
 }

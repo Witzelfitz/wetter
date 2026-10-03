@@ -280,6 +280,22 @@ mod tests {
         assert_eq!(app.bericht.as_ref().unwrap().ort.name, "Schönengrund");
         assert!(app.status.contains("offline"));
     }
+
+    #[test]
+    fn ein_ortswechsel_uebernimmt_ort_und_wetter_gemeinsam() {
+        let mut bern = crate::test_support::beispiel();
+        bern.ort.name = "Bern".into();
+        let mut gallen = bern.clone();
+        gallen.ort.name = "St. Gallen".into();
+        gallen.wetter.current.temperature_2m = Some(7.0);
+        let mut app = App::neu(Some(bern.clone()), true);
+        app.nummer = 2;
+        app.uebernehmen((2, Ok(Antwort::Wetter(Box::new(gallen)))));
+        app.uebernehmen((1, Ok(Antwort::Wetter(Box::new(bern)))));
+        let bericht = app.bericht.unwrap();
+        assert_eq!(bericht.ort.name, "St. Gallen");
+        assert_eq!(bericht.wetter.current.temperature_2m, Some(7.0));
+    }
     #[test]
     fn stundenwahl_ist_begrenzt_und_suche_akzeptiert_unicode() {
         let mut app = App::neu(Some(crate::test_support::beispiel()), true);

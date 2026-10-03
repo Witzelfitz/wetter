@@ -16,6 +16,7 @@ wetter --json "New York"       JSON für Skripte
 - Separate Niederschlagsleiste sowie Menge und Wahrscheinlichkeit.
 - Drei-Tage-Vorschau, Sonnenuntergang und zusätzliche Wetterdetails.
 - Übersicht, Stunden und Details; anpassbare Layouts für unterschiedliche Terminalgrössen.
+- Zentrierter Inhalt mit maximal 132 Spalten, ausgerichtete Temperatur- und Regenverläufe sowie gruppierte Wetterdetails.
 - Ortsauswahl bei mehreren Treffern und Aktualisierung im Hintergrund.
 - Vorhandene Daten bleiben bei fehlgeschlagenen Aktualisierungen sichtbar. Fehlende Werte werden als `—` beziehungsweise `–` dargestellt.
 
